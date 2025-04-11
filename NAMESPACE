@@ -19,4 +19,4 @@ export(fit_nullmodel,
        ncRNA,ncRNA_cond,ncRNA_cond_spa,
        Sliding_Window,Sliding_Window_cond,Sliding_Window_cond_spa,
        Dynamic_Window_SCANG,
-       LD_pruning)
+       LD_pruning,Genotype_sp_extraction,MultiSTAAR_sp)

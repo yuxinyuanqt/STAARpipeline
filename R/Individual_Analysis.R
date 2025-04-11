@@ -153,9 +153,36 @@ Individual_Analysis <- function(chr,start_loc=NULL,end_loc=NULL,individual_resul
 	variant.id <- seqGetData(genofile, "variant.id")
 	is.in <- (SNVlist)&(position>=start_loc)&(position<=end_loc)
 	SNV.id <- variant.id[is.in]
+	
+	results <- c()
+	
+	if(length(SNV.id) == 0)
+	{
+	  return(results)
+	}
+	
+	## get AF, AC
+	seqSetFilter(genofile, variant.id = SNV.id, sample.id = phenotype.id)
+	AF_AC_Missing <- seqGetAF_AC_Missing(genofile,minor=FALSE,parallel=FALSE)
+	REF_AF <- AF_AC_Missing$af
+	REF_AC <- AF_AC_Missing$ac
+	Missing_rate <- AF_AC_Missing$miss
+	ALT_AC <- 2*round(samplesize*(1-Missing_rate))-REF_AC
+	MAC <- ifelse(REF_AC>=ALT_AC,ALT_AC,REF_AC)
+	
+	is.include <- !((MAC<mac_cutoff) | is.na(MAC))
+	SNV.id <- SNV.id[is.include]
+	REF_AF <- REF_AF[is.include]
+	Missing_rate <- Missing_rate[is.include]
+	rm(AF_AC_Missing,is.include)
+	gc()
+	
+	seqResetFilter(genofile)
 
 	subset.num <- ceiling(length(SNV.id)/subset_variants_num)
 
+	results <- c()
+	
 	if(subset.num == 0)
 	{
 		return(results)
@@ -166,43 +193,40 @@ Individual_Analysis <- function(chr,start_loc=NULL,end_loc=NULL,individual_resul
 		if(kk < subset.num)
 		{
 			is.in <- ((kk-1)*subset_variants_num+1):(kk*subset_variants_num)
-			seqSetFilter(genofile,variant.id=SNV.id[is.in],sample.id=phenotype.id)
 		}
 		if(kk == subset.num)
 		{
 			is.in <- ((kk-1)*subset_variants_num+1):length(SNV.id)
-			seqSetFilter(genofile,variant.id=SNV.id[is.in],sample.id=phenotype.id)
 		}
 
-		## genotype id
-		id.genotype <- seqGetData(genofile,"sample.id")
-
-		id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
-		phenotype.id.merge <- data.frame(phenotype.id)
-		phenotype.id.merge <- dplyr::left_join(phenotype.id.merge,id.genotype.merge,by=c("phenotype.id"="id.genotype"))
-		id.genotype.match <- phenotype.id.merge$index
-
-
-		Geno <- seqGetData(genofile, "$dosage")
-		Geno <- Geno[id.genotype.match,,drop=FALSE]
-
-		if(geno_missing_imputation=="mean")
-		{
-			Geno <- matrix_flip_mean(Geno)
-		}
-		if(geno_missing_imputation=="minor")
-		{
-			Geno <- matrix_flip_minor(Geno)
-		}
-
-		MAF <- Geno$MAF
-		ALT_AF <- 1 - Geno$AF
-
-		CHR <- as.numeric(seqGetData(genofile, "chromosome"))
-		position <- as.numeric(seqGetData(genofile, "position"))
-		REF <- as.character(seqGetData(genofile, "$ref"))
-		ALT <- as.character(seqGetData(genofile, "$alt"))
-		N <- rep(samplesize,length(CHR))
+	  ## Genotype imputation and flip
+	  REF_AF.in <- REF_AF[is.in]
+	  Missing_rate.in <- Missing_rate[is.in]
+	  Genotype_sp <- Genotype_sp_extraction(genofile,variant.id=SNV.id[is.in],
+	                                        sample.id=phenotype.id,
+	                                        REF_AF=REF_AF.in,Missing_rate=Missing_rate.in)
+	  Geno <- Genotype_sp$Geno
+	  results_information <- Genotype_sp$results_information
+	  MAF.in <- results_information$MAF
+	  ALT_AF.in <- results_information$ALT_AF
+	  Missing_rate.in <- results_information$Missing_rate
+	  MAC.in <- round(2*MAF.in*(1-Missing_rate.in)*samplesize)
+	  
+	  CHR <- results_information$CHR
+	  position <- results_information$position
+	  REF <- results_information$REF
+	  ALT <- results_information$ALT
+	  N <- rep(samplesize,length(CHR))
+	  
+	  if (geno_missing_imputation == "mean")
+	  {
+	    Geno <- na.replace.sp(Geno,m=2*MAF.in)
+	  }
+	  if (geno_missing_imputation == "minor")
+	  {
+	    Geno <- na.replace.sp(Geno,is_NA_to_Zero=TRUE)
+	    MAF.in <- MAC.in/(2*samplesize)
+	  }
 
 		if(!all(CHR==chr))
 		{
@@ -211,209 +235,204 @@ Individual_Analysis <- function(chr,start_loc=NULL,end_loc=NULL,individual_resul
 
 		if((use_SPA)&!SPA_p_filter)
 		{
-			if(sum(MAF>(mac_cutoff-0.5)/samplesize/2)>=1)
+			if(length(MAF.in)>=1)
 			{
-				Geno <- Geno$Geno
+			  Geno <- as.matrix(Geno)
 
-				## Common_variants
-				Geno_common <- Geno[,(MAF>(mac_cutoff-0.5)/samplesize/2),drop=FALSE]
+				pvalue <- Individual_Score_Test_SPA(Geno,XW,XXWX_inv,residuals.phenotype,muhat,tol,max_iter)
 
-				CHR_common <- CHR[(MAF>(mac_cutoff-0.5)/samplesize/2)]
-				position_common <- position[(MAF>(mac_cutoff-0.5)/samplesize/2)]
-				REF_common <- REF[(MAF>(mac_cutoff-0.5)/samplesize/2)]
-				ALT_common <- ALT[(MAF>(mac_cutoff-0.5)/samplesize/2)]
-				MAF_common <- MAF[(MAF>(mac_cutoff-0.5)/samplesize/2)]
-				ALT_AF_common <- ALT_AF[(MAF>(mac_cutoff-0.5)/samplesize/2)]
-				N_common <- N[(MAF>(mac_cutoff-0.5)/samplesize/2)]
-
-				rm(Geno)
-				gc()
-
-				pvalue <- Individual_Score_Test_SPA(Geno_common,XW,XXWX_inv,residuals.phenotype,muhat,tol,max_iter)
-
-				results_temp <- data.frame(CHR=CHR_common,POS=position_common,REF=REF_common,ALT=ALT_common,ALT_AF=ALT_AF_common,MAF=MAF_common,N=N_common,
-				                           pvalue=pvalue)
+				results_temp <- data.frame(CHR=CHR,POS=position,REF=REF,ALT=ALT,ALT_AF=ALT_AF.in,
+				                           MAF=MAF.in,N=N,pvalue=pvalue)
 
 				results <- rbind(results,results_temp)
 			}
 		}else
 		{
-			## Common_variants
-			if(sum(MAF>=0.05)>=1)
+		  ## Common_variants or variants with relatively high missing rate
+		  is.common_highmissing <- (MAF.in>=0.01) | (Missing_rate.in>=0.01)
+		  if(sum(is.common_highmissing)>=1)
+		  {
+		    Geno_common <- Geno[,is.common_highmissing,drop=FALSE]
+		    
+		    CHR_common <- CHR[is.common_highmissing]
+		    position_common <- position[is.common_highmissing]
+		    REF_common <- REF[is.common_highmissing]
+		    ALT_common <- ALT[is.common_highmissing]
+		    MAF_common <- MAF.in[is.common_highmissing]
+		    ALT_AF_common <- ALT_AF.in[is.common_highmissing]
+		    N_common <- N[is.common_highmissing]
+		    
+		    ## Split into small chunks to run
+		    subset_variants_num_common <- 200
+		    subset.num_common <- ceiling(length(CHR_common)/subset_variants_num_common)
+		    
+		    for(kk_common in 1:subset.num_common)
+		    {
+		      if(kk_common < subset.num_common)
+		      {
+		        is.in_common_subset <- ((kk_common-1)*subset_variants_num_common+1):(kk_common*subset_variants_num_common)
+		      }
+		      if(kk_common == subset.num_common)
+		      {
+		        is.in_common_subset <- ((kk_common-1)*subset_variants_num_common+1):length(CHR_common)
+		      }
+		      
+		      Geno_common_subset <- Geno_common[,is.in_common_subset,drop=FALSE]
+		      
+		      CHR_common_subset <- CHR_common[is.in_common_subset]
+		      position_common_subset <- position_common[is.in_common_subset]
+		      REF_common_subset <- REF_common[is.in_common_subset]
+		      ALT_common_subset <- ALT_common[is.in_common_subset]
+		      MAF_common_subset <- MAF_common[is.in_common_subset]
+		      ALT_AF_common_subset <- ALT_AF_common[is.in_common_subset]
+		      N_common_subset <- N_common[is.in_common_subset]
+		      
+		      ## sparse GRM
+		      if(obj_nullmodel$sparse_kins)
+		      {
+		        if(n_pheno == 1)
+		        {
+		          Score_test <- Individual_Score_Test_sp(Geno_common_subset, Sigma_i, Sigma_iX, cov, residuals.phenotype)
+		        }else
+		        {
+		          Geno_common_subset <- Diagonal(n = n_pheno) %x% Geno_common_subset
+		          Score_test <- Individual_Score_Test_sp_multi(Geno_common_subset, Sigma_i, Sigma_iX, cov, residuals.phenotype, n_pheno)
+		        }
+		      }
+		      
+		      ## dense GRM
+		      if(!obj_nullmodel$sparse_kins)
+		      {
+		        if(n_pheno == 1)
+		        {
+		          Score_test <- Individual_Score_Test_sp_denseGRM(Geno_common_subset, P, residuals.phenotype)
+		        }else
+		        {
+		          Geno_common_subset <- Diagonal(n = n_pheno) %x% Geno_common_subset
+		          Score_test <- Individual_Score_Test_sp_denseGRM_multi(Geno_common_subset, P, residuals.phenotype, n_pheno)
+		        }
+		      }
+		      
+		      ## SPA approximation for small p-values
+		      if(use_SPA)
+		      {
+		        pvalue <- exp(-Score_test$pvalue_log)
+		        
+		        if(sum(pvalue < p_filter_cutoff)>=1)
+		        {
+		          is.common_subset_SPA <- as.vector(pvalue < p_filter_cutoff)
+		          Geno_common_subset_SPA <- Geno_common_subset[,is.common_subset_SPA,drop=FALSE]
+		          Geno_common_subset_SPA <- as.matrix(Geno_common_subset_SPA)
+		          
+		          pvalue_SPA <- Individual_Score_Test_SPA(Geno_common_subset_SPA,XW,XXWX_inv,residuals.phenotype,muhat,tol,max_iter)
+		          
+		          pvalue[pvalue < p_filter_cutoff] <- pvalue_SPA
+		        }
+		      }
+		      
+		      if(use_SPA)
+		      {
+		        results_temp <- data.frame(CHR=CHR_common_subset,POS=position_common_subset,REF=REF_common_subset,ALT=ALT_common_subset,ALT_AF=ALT_AF_common_subset,
+		                                   MAF=MAF_common_subset,N=N_common_subset,pvalue=pvalue)
+		      }else
+		      {
+		        if(n_pheno == 1)
+		        {
+		          results_temp <- data.frame(CHR=CHR_common_subset,POS=position_common_subset,REF=REF_common_subset,ALT=ALT_common_subset,ALT_AF=ALT_AF_common_subset,MAF=MAF_common_subset,N=N_common_subset,
+		                                     pvalue=exp(-Score_test$pvalue_log),pvalue_log10=Score_test$pvalue_log/log(10),
+		                                     Score=Score_test$Score,Score_se=Score_test$Score_se,
+		                                     Est=Score_test$Est,Est_se=Score_test$Est_se)
+		        }else
+		        {
+		          results_temp <- data.frame(CHR=CHR_common_subset,POS=position_common_subset,REF=REF_common_subset,ALT=ALT_common_subset,ALT_AF=ALT_AF_common_subset,MAF=MAF_common_subset,N=N_common_subset,
+		                                     pvalue=exp(-Score_test$pvalue_log),pvalue_log10=Score_test$pvalue_log/log(10))
+		          results_temp <- cbind(results_temp,matrix(Score_test$Score,ncol=n_pheno))
+		          colnames(results_temp)[10:(10+n_pheno-1)] <- paste0("Score",seq_len(n_pheno))
+		        }
+		      }
+		      results <- rbind(results,results_temp)
+		    }
+		  }
+
+
+		  ## Rare_variants with relatively low missing rate
+		  is.rare_lowmissing <- (MAF.in<0.01) & (Missing_rate.in<0.01)
+			if(sum(is.rare_lowmissing)>=1)
 			{
-				Geno_common <- Geno$Geno[,MAF>=0.05]
-
-				CHR_common <- CHR[MAF>=0.05]
-				position_common <- position[MAF>=0.05]
-				REF_common <- REF[MAF>=0.05]
-				ALT_common <- ALT[MAF>=0.05]
-				MAF_common <- MAF[MAF>=0.05]
-				ALT_AF_common <- ALT_AF[MAF>=0.05]
-				N_common <- N[MAF>=0.05]
-
-				if(sum(MAF>=0.05)==1)
-				{
-					Geno_common <- as.matrix(Geno_common,ncol=1)
-				}
+			  Geno_rare <- Geno[,is.rare_lowmissing,drop=FALSE]
+			  
+			  CHR_rare <- CHR[is.rare_lowmissing]
+			  position_rare <- position[is.rare_lowmissing]
+			  REF_rare <- REF[is.rare_lowmissing]
+			  ALT_rare <- ALT[is.rare_lowmissing]
+			  MAF_rare <- MAF.in[is.rare_lowmissing]
+			  ALT_AF_rare <- ALT_AF.in[is.rare_lowmissing]
+			  N_rare <- N[is.rare_lowmissing]
 
 				## sparse GRM
 				if(obj_nullmodel$sparse_kins)
 				{
-					if(n_pheno == 1)
-					{
-						Score_test <- Individual_Score_Test(Geno_common, Sigma_i, Sigma_iX, cov, residuals.phenotype)
-					}else
-					{
-						Geno_common <- Diagonal(n = n_pheno) %x% Geno_common
-						Score_test <- Individual_Score_Test_sp_multi(Geno_common, Sigma_i, Sigma_iX, cov, residuals.phenotype, n_pheno)
-					}
+				  if(n_pheno == 1)
+				  {
+				    Score_test <- Individual_Score_Test_sp(Geno_rare, Sigma_i, Sigma_iX, cov, residuals.phenotype)
+				  }else
+				  {
+				    Geno_rare <- Diagonal(n = n_pheno) %x% Geno_rare
+				    Score_test <- Individual_Score_Test_sp_multi(Geno_rare, Sigma_i, Sigma_iX, cov, residuals.phenotype, n_pheno)
+				  }
 				}
 
 				## dense GRM
 				if(!obj_nullmodel$sparse_kins)
 				{
-					if(n_pheno == 1)
-					{
-						Score_test <- Individual_Score_Test_denseGRM(Geno_common, P, residuals.phenotype)
-					}else
-					{
-						Geno_common <- Diagonal(n = n_pheno) %x% Geno_common
-						Score_test <- Individual_Score_Test_sp_denseGRM_multi(Geno_common, P, residuals.phenotype, n_pheno)
-					}
+				  if(n_pheno == 1)
+				  {
+				    Score_test <- Individual_Score_Test_sp_denseGRM(Geno_rare, P, residuals.phenotype)
+				  }
+				  else
+				  {
+				    Geno_rare <- Diagonal(n = n_pheno) %x% Geno_rare
+				    Score_test <- Individual_Score_Test_sp_denseGRM_multi(Geno_rare, P, residuals.phenotype, n_pheno)
+				  }
 				}
 
 				## SPA approximation for small p-values
 				if(use_SPA)
 				{
-					pvalue <- exp(-Score_test$pvalue_log)
-
-					if(sum(pvalue < p_filter_cutoff)>=1)
-					{
-						Geno_common_SPA <- Geno_common[,pvalue < p_filter_cutoff,drop=FALSE]
-						pvalue_SPA <- Individual_Score_Test_SPA(Geno_common_SPA,XW,XXWX_inv,residuals.phenotype,muhat,tol,max_iter)
-
-						pvalue[pvalue < p_filter_cutoff] <- pvalue_SPA
-					}
-				}
-
-				if(use_SPA)
-				{
-					results_temp <- data.frame(CHR=CHR_common,POS=position_common,REF=REF_common,ALT=ALT_common,ALT_AF=ALT_AF_common,MAF=MAF_common,N=N_common,
-					                           pvalue=pvalue)
-				}else
-				{
-					if(n_pheno == 1)
-					{
-						results_temp <- data.frame(CHR=CHR_common,POS=position_common,REF=REF_common,ALT=ALT_common,ALT_AF=ALT_AF_common,MAF=MAF_common,N=N_common,
-						                           pvalue=exp(-Score_test$pvalue_log),pvalue_log10=Score_test$pvalue_log/log(10),
-						                           Score=Score_test$Score,Score_se=Score_test$Score_se,
-						                           Est=Score_test$Est,Est_se=Score_test$Est_se)
-					}else
-					{
-						results_temp <- data.frame(CHR=CHR_common,POS=position_common,REF=REF_common,ALT=ALT_common,ALT_AF=ALT_AF_common,MAF=MAF_common,N=N_common,
-						                           pvalue=exp(-Score_test$pvalue_log),pvalue_log10=Score_test$pvalue_log/log(10))
-						results_temp <- cbind(results_temp,matrix(Score_test$Score,ncol=n_pheno))
-						colnames(results_temp)[10:(10+n_pheno-1)] <- paste0("Score",seq_len(n_pheno))
-					}
-				}
-				results <- rbind(results,results_temp)
-			}
-
-
-			## Rare_variants
-			if(sum((MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05))>=1)
-			{
-				Geno_rare <- Geno$Geno[,(MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05)]
-
-				CHR_rare <- CHR[(MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05)]
-				position_rare <- position[(MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05)]
-				REF_rare <- REF[(MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05)]
-				ALT_rare <- ALT[(MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05)]
-				MAF_rare <- MAF[(MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05)]
-				ALT_AF_rare <- ALT_AF[(MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05)]
-				N_rare <- N[(MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05)]
-
-				## sparse GRM
-				if(obj_nullmodel$sparse_kins)
-				{
-					if(sum((MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05))>=2)
-					{
-						if(n_pheno == 1)
-						{
-							Geno_rare <- as(Geno_rare,"dgCMatrix")
-							Score_test <- Individual_Score_Test_sp(Geno_rare, Sigma_i, Sigma_iX, cov, residuals.phenotype)
-						}else
-						{
-							Geno_rare <- Diagonal(n = n_pheno) %x% Geno_rare
-							Score_test <- Individual_Score_Test_sp_multi(Geno_rare, Sigma_i, Sigma_iX, cov, residuals.phenotype, n_pheno)
-						}
-					}else
-					{
-						if(n_pheno == 1)
-						{
-							Geno_rare <- as.matrix(Geno_rare,ncol=1)
-							Score_test <- Individual_Score_Test(Geno_rare, Sigma_i, Sigma_iX, cov, residuals.phenotype)
-						}
-						else
-						{
-							Geno_rare <- as.matrix(Diagonal(n = n_pheno) %x% Geno_rare)
-							Score_test <- Individual_Score_Test_multi(Geno_rare, Sigma_i, Sigma_iX, cov, residuals.phenotype, n_pheno)
-						}
-					}
-				}
-
-				## dense GRM
-				if(!obj_nullmodel$sparse_kins)
-				{
-					if(sum((MAF>(mac_cutoff-0.5)/samplesize/2)&(MAF<0.05))>=2)
-					{
-						if(n_pheno == 1)
-						{
-							Geno_rare <- as(Geno_rare,"dgCMatrix")
-							Score_test <- Individual_Score_Test_sp_denseGRM(Geno_rare, P, residuals.phenotype)
-						}
-						else{
-							Geno_rare <- Diagonal(n = n_pheno) %x% Geno_rare
-							Score_test <- Individual_Score_Test_sp_denseGRM_multi(Geno_rare, P, residuals.phenotype, n_pheno)
-						}
-					}else
-					{
-						if(n_pheno == 1)
-						{
-							Geno_rare <- as.matrix(Geno_rare,ncol=1)
-							Score_test <- Individual_Score_Test_denseGRM(Geno_rare, P, residuals.phenotype)
-						}
-						else
-						{
-							Geno_rare <- as.matrix(Diagonal(n = n_pheno) %x% Geno_rare)
-							Score_test <- Individual_Score_Test_denseGRM_multi(Geno_rare, P, residuals.phenotype, n_pheno)
-						}
-					}
-				}
-
-				## SPA approximation for small p-values
-				if(use_SPA)
-				{
-					pvalue <- exp(-Score_test$pvalue_log)
-
-					if(sum(pvalue < p_filter_cutoff)>=2)
-					{
-						Geno_rare_SPA <- as.matrix(Geno_rare)[,pvalue < p_filter_cutoff]
-					}
-
-					if(sum(pvalue < p_filter_cutoff)==1)
-					{
-						Geno_rare_SPA <- as.matrix(Geno_rare)[,pvalue < p_filter_cutoff]
-						Geno_rare_SPA <- as.matrix(Geno_rare_SPA,ncol=1)
-					}
-
-					if(sum(pvalue < p_filter_cutoff)>=1)
-					{
-						pvalue_SPA <- Individual_Score_Test_SPA(Geno_rare_SPA,XW,XXWX_inv,residuals.phenotype,muhat,tol,max_iter)
-
-						pvalue[pvalue < p_filter_cutoff] <- pvalue_SPA
-					}
-
+				  pvalue <- exp(-Score_test$pvalue_log)
+				  
+				  is.rare_SPA <- as.vector(pvalue < p_filter_cutoff)
+				  if(sum(is.rare_SPA)>=1)
+				  {
+				    pvalue_SPA <- c()
+				    Geno_rare_SPA <- Geno_rare[,is.rare_SPA,drop=FALSE]
+				    
+				    ## Split into small chunks to run
+				    subset_variants_num_SPA <- 50
+				    subset.num_SPA <- ceiling(sum(is.rare_SPA)/subset_variants_num_SPA)
+				    
+				    for(kk_SPA in 1:subset.num_SPA)
+				    {
+				      if(kk_SPA < subset.num_SPA)
+				      {
+				        is.in_SPA_subset <- ((kk_SPA-1)*subset_variants_num_SPA+1):(kk_SPA*subset_variants_num_SPA)
+				      }
+				      if(kk_SPA == subset.num_SPA)
+				      {
+				        is.in_SPA_subset <- ((kk_SPA-1)*subset_variants_num_SPA+1):sum(is.rare_SPA)
+				      }
+				      
+				      Geno_rare_SPA_subset <- Geno_rare_SPA[,is.in_SPA_subset,drop=FALSE]
+				      Geno_rare_SPA_subset <- as.matrix(Geno_rare_SPA_subset)
+				      
+				      if(length(is.in_SPA_subset)>=1)
+				      {
+				        pvalue_SPA_subset <- Individual_Score_Test_SPA(Geno_rare_SPA_subset,XW,XXWX_inv,residuals.phenotype,muhat,tol,max_iter)
+				        pvalue_SPA <- c(pvalue_SPA,pvalue_SPA_subset)
+				      }
+				    }
+				    pvalue[is.rare_SPA] <- pvalue_SPA
+				  }
 				}
 
 				if(use_SPA)

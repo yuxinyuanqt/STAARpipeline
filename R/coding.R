@@ -10,6 +10,7 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 	geno_missing_imputation <- match.arg(geno_missing_imputation)
 
 	phenotype.id <- as.character(obj_nullmodel$id_include)
+	samplesize <- length(phenotype.id)
 	n_pheno <- obj_nullmodel$n.pheno
 
 	## SPA status
@@ -71,6 +72,17 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 	variant.id.gene <- seqGetData(genofile, "variant.id")
 	lof.in.coding <- (GENCODE.EXONIC.Category=="stopgain")|(GENCODE.EXONIC.Category=="stoploss")|(GENCODE.Category=="splicing")|(GENCODE.Category=="exonic;splicing")|(GENCODE.Category=="ncRNA_splicing")|(GENCODE.Category=="ncRNA_exonic;splicing")|(GENCODE.EXONIC.Category=="nonsynonymous SNV")|(GENCODE.EXONIC.Category=="synonymous SNV")
 	variant.id.gene <- variant.id.gene[lof.in.coding]
+	
+	if(length(variant.id.gene)==0)
+	{
+	  results_coding <- list(plof = c(),
+	                         plof_ds = c(),
+	                         missense = c(),
+	                         disruptive_missense = c(),
+	                         synonymous = c())
+	  seqResetFilter(genofile)
+	  return(results_coding)
+	}
 
 	seqSetFilter(genofile,variant.id=variant.id.gene,sample.id=phenotype.id)
 
@@ -115,6 +127,12 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 			colnames(Anno.Int.PHRED.sub) <- Anno.Int.PHRED.sub.name
 		}
 	}
+	
+	## get AF, Missing rate
+	AF_AC_Missing <- seqGetAF_AC_Missing(genofile,minor=FALSE,parallel=FALSE)
+	REF_AF <- AF_AC_Missing$af
+	Missing_rate <- AF_AC_Missing$miss
+	variant_maf_cutoff_filter <- rare_maf_cutoff
 
 	################################################
 	#                  plof_ds
@@ -123,43 +141,47 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 	lof.in.plof <- (GENCODE.EXONIC.Category=="stopgain")|(GENCODE.EXONIC.Category=="stoploss")|(GENCODE.Category=="splicing")|(GENCODE.Category=="exonic;splicing")|(GENCODE.Category=="ncRNA_splicing")|(GENCODE.Category=="ncRNA_exonic;splicing")|((GENCODE.EXONIC.Category=="nonsynonymous SNV")&(MetaSVM_pred=="D"))
 	variant.id.gene.category <- variant.id.gene[lof.in.plof]
 
-	seqSetFilter(genofile,variant.id=variant.id.gene.category,sample.id=phenotype.id)
-
-	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
-	# id.genotype.match <- rep(0,length(id.genotype))
-
-	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
-	phenotype.id.merge <- data.frame(phenotype.id)
-	phenotype.id.merge <- dplyr::left_join(phenotype.id.merge,id.genotype.merge,by=c("phenotype.id"="id.genotype"))
-	id.genotype.match <- phenotype.id.merge$index
-
-	## Genotype
-	Geno <- NULL
-	if(length(seqGetData(genofile, "variant.id"))<rv_num_cutoff_max_prefilter)
-	{
-		Geno <- seqGetData(genofile, "$dosage")
-		Geno <- Geno[id.genotype.match,,drop=FALSE]
-	}
-
-	## impute missing
-	if(!is.null(dim(Geno)))
-	{
-		if(dim(Geno)[2]>0)
-		{
-			if(geno_missing_imputation=="mean")
-			{
-				Geno <- matrix_flip_mean(Geno)$Geno
-			}
-			if(geno_missing_imputation=="minor")
-			{
-				Geno <- matrix_flip_minor(Geno)$Geno
-			}
-		}
-	}
-
 	## Annotation
 	Anno.Int.PHRED.sub.category <- Anno.Int.PHRED.sub[lof.in.plof,]
+	
+	Genotype_sp <- Genotype_sp_extraction(genofile,variant.id=variant.id.gene.category,
+	                                      sample.id=phenotype.id,
+	                                      REF_AF=REF_AF[lof.in.plof],variant_maf_cutoff_filter=variant_maf_cutoff_filter,
+	                                      Missing_rate=Missing_rate[lof.in.plof],
+	                                      rv_num_cutoff_max_prefilter=rv_num_cutoff_max_prefilter,
+	                                      annotation_phred=Anno.Int.PHRED.sub.category)
+	Geno <- Genotype_sp$Geno
+	Anno.Int.PHRED.sub.category <- Genotype_sp$annotation_phred
+	results_information <- Genotype_sp$results_information
+	rm(Genotype_sp)
+	gc()
+	
+	if(!is.null(Geno) & inherits(Geno, "dgCMatrix"))
+	{
+	  MAF.in <- results_information$MAF
+	  Missing_rate.in <- results_information$Missing_rate
+	  MAC.in <- round(2*MAF.in*(1-Missing_rate.in)*samplesize)
+	  rm(results_information)
+	  
+	  if (geno_missing_imputation == "mean")
+	  {
+	    Geno <- na.replace.sp(Geno,m=2*MAF.in)
+	  }
+	  if (geno_missing_imputation == "minor")
+	  {
+	    Geno <- na.replace.sp(Geno,is_NA_to_Zero=TRUE)
+	    MAF.in <- MAC.in/(2*samplesize)
+	  }
+	  
+	  if(use_ancestry_informed == TRUE)
+	  {
+	    Geno <- as.matrix(Geno)
+	  }
+	} else
+	{
+	  Geno <- NULL
+	  MAF.in <- numeric()
+	}
 
 	pvalues <- 0
 	if(n_pheno == 1)
@@ -167,17 +189,17 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 		if(!use_SPA)
 		{
 			if(use_ancestry_informed == FALSE){
-				try(pvalues <- STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+				try(pvalues <- STAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 			}else{
 				try(pvalues <- AI_STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,find_weight=find_weight),silent=silent)
 				pvalues_plof_ds <- pvalues
 			}
 		}else{
-			try(pvalues <- STAAR_Binary_SPA(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
+			try(pvalues <- STAAR_Binary_SPA_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
 		}
 	}else
 	{
-		try(pvalues <- MultiSTAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+		try(pvalues <- MultiSTAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 	}
 
 	results_plof_ds <- c()
@@ -225,43 +247,47 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 	lof.in.plof <- (GENCODE.EXONIC.Category=="stopgain")|(GENCODE.EXONIC.Category=="stoploss")|(GENCODE.Category=="splicing")|(GENCODE.Category=="exonic;splicing")|(GENCODE.Category=="ncRNA_splicing")|(GENCODE.Category=="ncRNA_exonic;splicing")
 	variant.id.gene.category <- variant.id.gene[lof.in.plof]
 
-	seqSetFilter(genofile,variant.id=variant.id.gene.category,sample.id=phenotype.id)
-
-	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
-	# id.genotype.match <- rep(0,length(id.genotype))
-
-	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
-	phenotype.id.merge <- data.frame(phenotype.id)
-	phenotype.id.merge <- dplyr::left_join(phenotype.id.merge,id.genotype.merge,by=c("phenotype.id"="id.genotype"))
-	id.genotype.match <- phenotype.id.merge$index
-
-	## Genotype
-	Geno <- NULL
-	if(length(seqGetData(genofile, "variant.id"))<rv_num_cutoff_max_prefilter)
-	{
-		Geno <- seqGetData(genofile, "$dosage")
-		Geno <- Geno[id.genotype.match,,drop=FALSE]
-	}
-
-	## impute missing
-	if(!is.null(dim(Geno)))
-	{
-		if(dim(Geno)[2]>0)
-		{
-			if(geno_missing_imputation=="mean")
-			{
-				Geno <- matrix_flip_mean(Geno)$Geno
-			}
-			if(geno_missing_imputation=="minor")
-			{
-				Geno <- matrix_flip_minor(Geno)$Geno
-			}
-		}
-	}
-
 	## Annotation
 	Anno.Int.PHRED.sub.category <- Anno.Int.PHRED.sub[lof.in.plof,]
+	
+	Genotype_sp <- Genotype_sp_extraction(genofile,variant.id=variant.id.gene.category,
+	                                      sample.id=phenotype.id,
+	                                      REF_AF=REF_AF[lof.in.plof],variant_maf_cutoff_filter=variant_maf_cutoff_filter,
+	                                      Missing_rate=Missing_rate[lof.in.plof],
+	                                      rv_num_cutoff_max_prefilter=rv_num_cutoff_max_prefilter,
+	                                      annotation_phred=Anno.Int.PHRED.sub.category)
+	Geno <- Genotype_sp$Geno
+	Anno.Int.PHRED.sub.category <- Genotype_sp$annotation_phred
+	results_information <- Genotype_sp$results_information
+	rm(Genotype_sp)
+	gc()
+	
+	if(!is.null(Geno) & inherits(Geno, "dgCMatrix"))
+	{
+	  MAF.in <- results_information$MAF
+	  Missing_rate.in <- results_information$Missing_rate
+	  MAC.in <- round(2*MAF.in*(1-Missing_rate.in)*samplesize)
+	  rm(results_information)
+	  
+	  if (geno_missing_imputation == "mean")
+	  {
+	    Geno <- na.replace.sp(Geno,m=2*MAF.in)
+	  }
+	  if (geno_missing_imputation == "minor")
+	  {
+	    Geno <- na.replace.sp(Geno,is_NA_to_Zero=TRUE)
+	    MAF.in <- MAC.in/(2*samplesize)
+	  }
+	  
+	  if(use_ancestry_informed == TRUE)
+	  {
+	    Geno <- as.matrix(Geno)
+	  }
+	} else
+	{
+	  Geno <- NULL
+	  MAF.in <- numeric()
+	}
 
 	pvalues <- 0
 	if(n_pheno == 1)
@@ -269,17 +295,17 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 		if(!use_SPA)
 		{
 			if(use_ancestry_informed == FALSE){
-				try(pvalues <- STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+				try(pvalues <- STAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 			}else{
 				try(pvalues <- AI_STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,find_weight=find_weight),silent=silent)
 				pvalues_plof <- pvalues
 			}
 		}else{
-			try(pvalues <- STAAR_Binary_SPA(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
+			try(pvalues <- STAAR_Binary_SPA_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
 		}
 	}else
 	{
-		try(pvalues <- MultiSTAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+		try(pvalues <- MultiSTAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 	}
 
 	results_plof <- c()
@@ -326,43 +352,47 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 	lof.in.synonymous <- (GENCODE.EXONIC.Category=="synonymous SNV")
 	variant.id.gene.category <- variant.id.gene[lof.in.synonymous]
 
-	seqSetFilter(genofile,variant.id=variant.id.gene.category,sample.id=phenotype.id)
-
-	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
-	# id.genotype.match <- rep(0,length(id.genotype))
-
-	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
-	phenotype.id.merge <- data.frame(phenotype.id)
-	phenotype.id.merge <- dplyr::left_join(phenotype.id.merge,id.genotype.merge,by=c("phenotype.id"="id.genotype"))
-	id.genotype.match <- phenotype.id.merge$index
-
-	## Genotype
-	Geno <- NULL
-	if(length(seqGetData(genofile, "variant.id"))<rv_num_cutoff_max_prefilter)
-	{
-		Geno <- seqGetData(genofile, "$dosage")
-		Geno <- Geno[id.genotype.match,,drop=FALSE]
-	}
-
-	## impute missing
-	if(!is.null(dim(Geno)))
-	{
-		if(dim(Geno)[2]>0)
-		{
-			if(geno_missing_imputation=="mean")
-			{
-				Geno <- matrix_flip_mean(Geno)$Geno
-			}
-			if(geno_missing_imputation=="minor")
-			{
-				Geno <- matrix_flip_minor(Geno)$Geno
-			}
-		}
-	}
-
 	## Annotation
 	Anno.Int.PHRED.sub.category <- Anno.Int.PHRED.sub[lof.in.synonymous,]
+	
+	Genotype_sp <- Genotype_sp_extraction(genofile,variant.id=variant.id.gene.category,
+	                                      sample.id=phenotype.id,
+	                                      REF_AF=REF_AF[lof.in.synonymous],variant_maf_cutoff_filter=variant_maf_cutoff_filter,
+	                                      Missing_rate=Missing_rate[lof.in.synonymous],
+	                                      rv_num_cutoff_max_prefilter=rv_num_cutoff_max_prefilter,
+	                                      annotation_phred=Anno.Int.PHRED.sub.category)
+	Geno <- Genotype_sp$Geno
+	Anno.Int.PHRED.sub.category <- Genotype_sp$annotation_phred
+	results_information <- Genotype_sp$results_information
+	rm(Genotype_sp)
+	gc()
+	
+	if(!is.null(Geno) & inherits(Geno, "dgCMatrix"))
+	{
+	  MAF.in <- results_information$MAF
+	  Missing_rate.in <- results_information$Missing_rate
+	  MAC.in <- round(2*MAF.in*(1-Missing_rate.in)*samplesize)
+	  rm(results_information)
+	  
+	  if (geno_missing_imputation == "mean")
+	  {
+	    Geno <- na.replace.sp(Geno,m=2*MAF.in)
+	  }
+	  if (geno_missing_imputation == "minor")
+	  {
+	    Geno <- na.replace.sp(Geno,is_NA_to_Zero=TRUE)
+	    MAF.in <- MAC.in/(2*samplesize)
+	  }
+	  
+	  if(use_ancestry_informed == TRUE)
+	  {
+	    Geno <- as.matrix(Geno)
+	  }
+	} else
+	{
+	  Geno <- NULL
+	  MAF.in <- numeric()
+	}
 
 	pvalues <- 0
 	if(n_pheno == 1)
@@ -370,17 +400,17 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 		if(!use_SPA)
 		{
 			if(use_ancestry_informed == FALSE){
-				try(pvalues <- STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+				try(pvalues <- STAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 			}else{
 				try(pvalues <- AI_STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,find_weight=find_weight),silent=silent)
 				pvalues_synonymous <- pvalues
 			}
 		}else{
-			try(pvalues <- STAAR_Binary_SPA(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
+			try(pvalues <- STAAR_Binary_SPA_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
 		}
 	}else
 	{
-		try(pvalues <- MultiSTAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+		try(pvalues <- MultiSTAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 	}
 
 	results_synonymous <- c()
@@ -428,43 +458,47 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 	lof.in.missense <- (GENCODE.EXONIC.Category=="nonsynonymous SNV")
 	variant.id.gene.category <- variant.id.gene[lof.in.missense]
 
-	seqSetFilter(genofile,variant.id=variant.id.gene.category,sample.id=phenotype.id)
-
-	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
-	# id.genotype.match <- rep(0,length(id.genotype))
-
-	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
-	phenotype.id.merge <- data.frame(phenotype.id)
-	phenotype.id.merge <- dplyr::left_join(phenotype.id.merge,id.genotype.merge,by=c("phenotype.id"="id.genotype"))
-	id.genotype.match <- phenotype.id.merge$index
-
-	## Genotype
-	Geno <- NULL
-	if(length(seqGetData(genofile, "variant.id"))<rv_num_cutoff_max_prefilter)
-	{
-		Geno <- seqGetData(genofile, "$dosage")
-		Geno <- Geno[id.genotype.match,,drop=FALSE]
-	}
-
-	## impute missing
-	if(!is.null(dim(Geno)))
-	{
-		if(dim(Geno)[2]>0)
-		{
-			if(geno_missing_imputation=="mean")
-			{
-				Geno <- matrix_flip_mean(Geno)$Geno
-			}
-			if(geno_missing_imputation=="minor")
-			{
-				Geno <- matrix_flip_minor(Geno)$Geno
-			}
-		}
-	}
-
 	## Annotation
 	Anno.Int.PHRED.sub.category <- Anno.Int.PHRED.sub[lof.in.missense,]
+	
+	Genotype_sp <- Genotype_sp_extraction(genofile,variant.id=variant.id.gene.category,
+	                                      sample.id=phenotype.id,
+	                                      REF_AF=REF_AF[lof.in.missense],variant_maf_cutoff_filter=variant_maf_cutoff_filter,
+	                                      Missing_rate=Missing_rate[lof.in.missense],
+	                                      rv_num_cutoff_max_prefilter=rv_num_cutoff_max_prefilter,
+	                                      annotation_phred=Anno.Int.PHRED.sub.category)
+	Geno <- Genotype_sp$Geno
+	Anno.Int.PHRED.sub.category <- Genotype_sp$annotation_phred
+	results_information <- Genotype_sp$results_information
+	rm(Genotype_sp)
+	gc()
+	
+	if(!is.null(Geno) & inherits(Geno, "dgCMatrix"))
+	{
+	  MAF.in <- results_information$MAF
+	  Missing_rate.in <- results_information$Missing_rate
+	  MAC.in <- round(2*MAF.in*(1-Missing_rate.in)*samplesize)
+	  rm(results_information)
+	  
+	  if (geno_missing_imputation == "mean")
+	  {
+	    Geno <- na.replace.sp(Geno,m=2*MAF.in)
+	  }
+	  if (geno_missing_imputation == "minor")
+	  {
+	    Geno <- na.replace.sp(Geno,is_NA_to_Zero=TRUE)
+	    MAF.in <- MAC.in/(2*samplesize)
+	  }
+	  
+	  if(use_ancestry_informed == TRUE)
+	  {
+	    Geno <- as.matrix(Geno)
+	  }
+	} else
+	{
+	  Geno <- NULL
+	  MAF.in <- numeric()
+	}
 
 	pvalues <- 0
 	if(n_pheno == 1)
@@ -472,17 +506,17 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 		if(!use_SPA)
 		{
 			if(use_ancestry_informed == FALSE){
-				try(pvalues <- STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+				try(pvalues <- STAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 			}else{
 				try(pvalues <- AI_STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,find_weight=find_weight),silent=silent)
 				pvalues_m <- pvalues
 			}
 		}else{
-			try(pvalues <- STAAR_Binary_SPA(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
+			try(pvalues <- STAAR_Binary_SPA_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
 		}
 	}else
 	{
-		try(pvalues <- MultiSTAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+		try(pvalues <- MultiSTAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 	}
 
 	results <- c()
@@ -514,43 +548,47 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 	lof.in.dmissense <- (GENCODE.EXONIC.Category=="nonsynonymous SNV")&(MetaSVM_pred=="D")
 	variant.id.gene.category <- variant.id.gene[lof.in.dmissense]
 
-	seqSetFilter(genofile,variant.id=variant.id.gene.category,sample.id=phenotype.id)
-
-	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
-	# id.genotype.match <- rep(0,length(id.genotype))
-
-	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
-	phenotype.id.merge <- data.frame(phenotype.id)
-	phenotype.id.merge <- dplyr::left_join(phenotype.id.merge,id.genotype.merge,by=c("phenotype.id"="id.genotype"))
-	id.genotype.match <- phenotype.id.merge$index
-
-	## Genotype
-	Geno <- NULL
-	if(length(seqGetData(genofile, "variant.id"))<rv_num_cutoff_max_prefilter)
-	{
-		Geno <- seqGetData(genofile, "$dosage")
-		Geno <- Geno[id.genotype.match,,drop=FALSE]
-	}
-
-	## impute missing
-	if(!is.null(dim(Geno)))
-	{
-		if(dim(Geno)[2]>0)
-		{
-			if(geno_missing_imputation=="mean")
-			{
-				Geno <- matrix_flip_mean(Geno)$Geno
-			}
-			if(geno_missing_imputation=="minor")
-			{
-				Geno <- matrix_flip_minor(Geno)$Geno
-			}
-		}
-	}
-
 	## Annotation
 	Anno.Int.PHRED.sub.category <- Anno.Int.PHRED.sub[lof.in.dmissense,]
+	
+	Genotype_sp <- Genotype_sp_extraction(genofile,variant.id=variant.id.gene.category,
+	                                      sample.id=phenotype.id,
+	                                      REF_AF=REF_AF[lof.in.dmissense],variant_maf_cutoff_filter=variant_maf_cutoff_filter,
+	                                      Missing_rate=Missing_rate[lof.in.dmissense],
+	                                      rv_num_cutoff_max_prefilter=rv_num_cutoff_max_prefilter,
+	                                      annotation_phred=Anno.Int.PHRED.sub.category)
+	Geno <- Genotype_sp$Geno
+	Anno.Int.PHRED.sub.category <- Genotype_sp$annotation_phred
+	results_information <- Genotype_sp$results_information
+	rm(Genotype_sp)
+	gc()
+	
+	if(!is.null(Geno) & inherits(Geno, "dgCMatrix"))
+	{
+	  MAF.in <- results_information$MAF
+	  Missing_rate.in <- results_information$Missing_rate
+	  MAC.in <- round(2*MAF.in*(1-Missing_rate.in)*samplesize)
+	  rm(results_information)
+	  
+	  if (geno_missing_imputation == "mean")
+	  {
+	    Geno <- na.replace.sp(Geno,m=2*MAF.in)
+	  }
+	  if (geno_missing_imputation == "minor")
+	  {
+	    Geno <- na.replace.sp(Geno,is_NA_to_Zero=TRUE)
+	    MAF.in <- MAC.in/(2*samplesize)
+	  }
+	  
+	  if(use_ancestry_informed == TRUE)
+	  {
+	    Geno <- as.matrix(Geno)
+	  }
+	} else
+	{
+	  Geno <- NULL
+	  MAF.in <- numeric()
+	}
 
 	pvalues <- 0
 	if(n_pheno == 1)
@@ -558,17 +596,17 @@ coding <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 		if(!use_SPA)
 		{
 			if(use_ancestry_informed == FALSE){
-				try(pvalues <- STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+				try(pvalues <- STAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 			}else{
 				try(pvalues <- AI_STAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,find_weight=find_weight),silent=silent)
 				pvalues_ds <- pvalues
 			}
 		}else{
-			try(pvalues <- STAAR_Binary_SPA(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
+			try(pvalues <- STAAR_Binary_SPA_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max,SPA_p_filter=SPA_p_filter,p_filter_cutoff=p_filter_cutoff),silent=silent)
 		}
 	}else
 	{
-		try(pvalues <- MultiSTAAR(Geno,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
+		try(pvalues <- MultiSTAAR_sp(Geno,MAF.in,obj_nullmodel,Anno.Int.PHRED.sub.category,rare_maf_cutoff=rare_maf_cutoff,rv_num_cutoff=rv_num_cutoff,rv_num_cutoff_max=rv_num_cutoff_max),silent=silent)
 	}
 
 	if(inherits(pvalues, "list"))
