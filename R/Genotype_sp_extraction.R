@@ -9,19 +9,19 @@
 #'     - Use \code{"$dosage"} to extract Geno (dosages of the reference allele).
 #'     - Convert the extracted data into the \code{"dgCMatrix"} format (sparse matrix).
 #'
-#' (2) Case 2: \code{ALT_AF ≤ 0.5} and (\code{MAF ≥ rare_maf_cutoff} or \code{Missing_rate ≥ Missing_cutoff})
+#' (2) Case 2: \code{ALT_AF <= 0.5} and (\code{MAF >= rare_maf_cutoff} or \code{Missing_rate >= Missing_cutoff})
 #'     - Use \code{"$dosage_alt"} to extract Geno (dosages of the alternative allele).
 #'     - Convert the extracted data into the \code{"dgCMatrix"} format (sparse matrix).
 #'
-#' (3) Case 3: \code{ALT_AF ≤ 0.5} and (\code{MAF < rare_maf_cutoff} and \code{Missing_rate < Missing_cutoff})
-#'     - Use \code{"$dosage_ap"} to directly extract Geno in the \code{"dgCMatrix"} format.
+#' (3) Case 3: \code{ALT_AF <= 0.5} and (\code{MAF < rare_maf_cutoff} and \code{Missing_rate < Missing_cutoff})
+#'     - Use \code{"$dosage_sp"} to directly extract Geno in the \code{"dgCMatrix"} format.
 #'
 #' Note:
 #' - \code{REF_AF} and \code{Missing_rate} can be efficiently computed using
 #'   \code{SeqArray::seqGetAF_AC_Missing(genofile, minor=FALSE)}.
 #'
 #' @param genofile an object of opened annotated GDS (aGDS) file.
-#' @param variant.id 	ID of selected variants.
+#' @param variant.id ID of selected variants.
 #' @param sample.id ID of selected samples.
 #' @param REF_AF a numeric vector of reference allele frequencies for each variant.
 #' @param rare_maf_cutoff the cutoff of maximum minor allele frequency in defining rare variants (default = 0.01).
@@ -109,7 +109,7 @@ Genotype_sp_extraction <- function(genofile,variant.id,sample.id,
       seqSetFilter(genofile,variant.id=variant.id.dosage[is.in.dosage],sample.id=sample.id)
       
       ## genotype id
-      id.genotype <- seqGetData(genofile,"sample.id")
+      id.genotype <- as.character(seqGetData(genofile,"sample.id"))
       
       id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
       phenotype.id.merge <- data.frame(sample.id)
@@ -178,7 +178,7 @@ Genotype_sp_extraction <- function(genofile,variant.id,sample.id,
       seqSetFilter(genofile,variant.id=variant.id.dosage_alt[is.in.dosage_alt],sample.id=sample.id)
       
       ## genotype id
-      id.genotype <- seqGetData(genofile,"sample.id")
+      id.genotype <- as.character(seqGetData(genofile,"sample.id"))
       
       id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
       phenotype.id.merge <- data.frame(sample.id)
@@ -244,7 +244,7 @@ Genotype_sp_extraction <- function(genofile,variant.id,sample.id,
     seqSetFilter(genofile,variant.id=variant.id.dosage_sp,sample.id=sample.id)
     
     ## genotype id
-    id.genotype <- seqGetData(genofile,"sample.id")
+    id.genotype <- as.character(seqGetData(genofile,"sample.id"))
     
     id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
     phenotype.id.merge <- data.frame(sample.id)

@@ -114,7 +114,7 @@ AI_Individual_Analysis <- function(chr,individual_results, genofile, obj_nullmod
 	## match variant information in provided data to those in genofile
 	individual_results_chr <- dplyr::inner_join(individual_results_chr, ref_group, by = c("CHR", "POS", "REF", "ALT"))
 
-	id.genotype <- seqGetData(genofile,"sample.id")
+	id.genotype <- as.character(seqGetData(genofile,"sample.id"))
 
 	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
 	phenotype.id.merge <- data.frame(phenotype.id)

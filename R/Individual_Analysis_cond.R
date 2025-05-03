@@ -101,7 +101,7 @@ Individual_Analysis_cond <- function(chr,individual_results,genofile,obj_nullmod
 		seqSetFilter(genofile,variant.id=variant.id.in,sample.id=phenotype.id)
 
 		## genotype id
-		id.genotype <- seqGetData(genofile,"sample.id")
+		id.genotype <- as.character(seqGetData(genofile,"sample.id"))
 
 		id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
 		phenotype.id.merge <- data.frame(phenotype.id)
@@ -153,7 +153,7 @@ Individual_Analysis_cond <- function(chr,individual_results,genofile,obj_nullmod
 	seqSetFilter(genofile,variant.id=variant.id.in,sample.id=phenotype.id)
 
 	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
+	id.genotype <- as.character(seqGetData(genofile,"sample.id"))
 
 	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
 	phenotype.id.merge <- data.frame(phenotype.id)

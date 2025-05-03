@@ -13,7 +13,7 @@ Genotype_sp_extraction(
   variant_maf_cutoff_filter = 1,
   Missing_rate,
   Missing_cutoff = 0.01,
-  subset_variants_num = 2000,
+  subset_variants_num = 1000,
   rv_num_cutoff_max_prefilter = 1e+09,
   annotation_phred = NULL
 )
@@ -58,12 +58,12 @@ The extracted variants are processed based on the following three cases:
     - Use \code{"$dosage"} to extract Geno (dosages of the reference allele).
     - Convert the extracted data into the \code{"dgCMatrix"} format (sparse matrix).
 
-(2) Case 2: \code{ALT_AF ≤ 0.5} and (\code{MAF ≥ rare_maf_cutoff} or \code{Missing_rate ≥ Missing_cutoff})
+(2) Case 2: \code{ALT_AF <= 0.5} and (\code{MAF >= rare_maf_cutoff} or \code{Missing_rate >= Missing_cutoff})
     - Use \code{"$dosage_alt"} to extract Geno (dosages of the alternative allele).
     - Convert the extracted data into the \code{"dgCMatrix"} format (sparse matrix).
 
-(3) Case 3: \code{ALT_AF ≤ 0.5} and (\code{MAF < rare_maf_cutoff} and \code{Missing_rate < Missing_cutoff})
-    - Use \code{"$dosage_ap"} to directly extract Geno in the \code{"dgCMatrix"} format.
+(3) Case 3: \code{ALT_AF <= 0.5} and (\code{MAF < rare_maf_cutoff} and \code{Missing_rate < Missing_cutoff})
+    - Use \code{"$dosage_sp"} to directly extract Geno in the \code{"dgCMatrix"} format.
 
 Note:
 - \code{REF_AF} and \code{Missing_rate} can be efficiently computed using

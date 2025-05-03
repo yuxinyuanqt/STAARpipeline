@@ -65,7 +65,7 @@ plof_ds_cond_spa <- function(chr,gene_name,genofile,obj_nullmodel,genes,known_lo
 	seqSetFilter(genofile,variant.id=variant.id.gene,sample.id=phenotype.id)
 
 	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
+	id.genotype <- as.character(seqGetData(genofile,"sample.id"))
 	# id.genotype.match <- rep(0,length(id.genotype))
 
 	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))

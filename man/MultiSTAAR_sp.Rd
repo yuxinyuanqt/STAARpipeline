@@ -6,7 +6,7 @@
 \usage{
 MultiSTAAR_sp(
   genotype_sp,
-  MAF,
+  MAF = NULL,
   obj_nullmodel,
   annotation_phred = NULL,
   rare_maf_cutoff = 0.01,
@@ -17,12 +17,11 @@ MultiSTAAR_sp(
 \arguments{
 \item{genotype_sp}{a sparse genotype matrix (dgCMatrix) of dimension n*p,
 where n is the sample size and p is the number of genetic variants.
-The matrix should be extracted using \code{\link{Genotype_sp_extraction}},
+The matrix should be extracted using \code{STAARpipeline::Genotype_sp_extraction},
 and it has been flipped: only the minor allele is stored (coded as 1), while the major allele is not stored (coded as 0).}
 
 \item{MAF}{a numeric vector of minor allele frequencies for the variants in \code{genotype_sp}.
-It can be computed as \code{MAC / (2 * n)} using \code{Matrix::colSums(genotype_sp)} to obtain MAC,
-where \code{n} is the number of samples.}
+It can be computed using \code{Matrix::colMeans(genotype_sp,na.rm = TRUE)/2}.}
 
 \item{obj_nullmodel}{an object from fitting the null model, which is the
 output from \code{\link{fit_null_glmmkin_multi}} function for unrelated or

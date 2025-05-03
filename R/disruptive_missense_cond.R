@@ -63,7 +63,7 @@ disruptive_missense_cond <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 	seqSetFilter(genofile,variant.id=variant.id.gene,sample.id=phenotype.id)
 
 	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
+	id.genotype <- as.character(seqGetData(genofile,"sample.id"))
 	# id.genotype.match <- rep(0,length(id.genotype))
 
 	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
@@ -180,7 +180,7 @@ disruptive_missense_cond <- function(chr,gene_name,genofile,obj_nullmodel,genes,
 		seqSetFilter(genofile,variant.id=variant.id.in,sample.id=phenotype.id)
 
 		## genotype id
-		id.genotype <- seqGetData(genofile,"sample.id")
+		id.genotype <- as.character(seqGetData(genofile,"sample.id"))
 
 		id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
 		phenotype.id.merge <- data.frame(phenotype.id)

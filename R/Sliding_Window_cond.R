@@ -103,7 +103,7 @@ Sliding_Window_cond <- function(chr,start_loc,end_loc,genofile,obj_nullmodel,
 	seqSetFilter(genofile,variant.id=variant.id[is.in],sample.id=phenotype.id)
 
 	## genotype id
-	id.genotype <- seqGetData(genofile,"sample.id")
+	id.genotype <- as.character(seqGetData(genofile,"sample.id"))
 	# id.genotype.match <- rep(0,length(id.genotype))
 
 	id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
@@ -216,7 +216,7 @@ Sliding_Window_cond <- function(chr,start_loc,end_loc,genofile,obj_nullmodel,
 			seqSetFilter(genofile,variant.id=variant.id.in,sample.id=phenotype.id)
 
 			## genotype id
-			id.genotype <- seqGetData(genofile,"sample.id")
+			id.genotype <- as.character(seqGetData(genofile,"sample.id"))
 
 			id.genotype.merge <- data.frame(id.genotype,index=seq(1,length(id.genotype)))
 			phenotype.id.merge <- data.frame(phenotype.id)
