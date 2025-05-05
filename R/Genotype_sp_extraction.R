@@ -130,7 +130,8 @@ Genotype_sp_extraction <- function(genofile,variant.id,sample.id,
       
       results_dosage_temp <- data.frame(CHR=CHR.dosage,position=position.dosage,
                                         REF=REF.dosage,ALT=ALT.dosage,
-                                        variant.id=variant.id.in.dosage)
+                                        variant.id=variant.id.in.dosage,
+                                        stringsAsFactors = FALSE)
       results_dosage <- rbind(results_dosage,results_dosage_temp)
       
       seqResetFilter(genofile)
@@ -199,7 +200,8 @@ Genotype_sp_extraction <- function(genofile,variant.id,sample.id,
       
       results_dosage_alt_temp <- data.frame(CHR=CHR.dosage_alt,position=position.dosage_alt,
                                             REF=REF.dosage_alt,ALT=ALT.dosage_alt,
-                                            variant.id=variant.id.in.dosage_alt)
+                                            variant.id=variant.id.in.dosage_alt,
+                                            stringsAsFactors = FALSE)
       results_dosage_alt <- rbind(results_dosage_alt,results_dosage_alt_temp)
       
       seqResetFilter(genofile)
@@ -263,7 +265,8 @@ Genotype_sp_extraction <- function(genofile,variant.id,sample.id,
     annotation_phred.sub_sp <- annotation_phred.sub[is.dosge_sp,,drop=FALSE]
     results_dosage_sp <- data.frame(CHR=CHR.dosage_sp,position=position.dosage_sp,
                                     REF=REF.dosage_sp,ALT=ALT.dosage_sp,
-                                    variant.id=variant.id.in.dosage_sp)
+                                    variant.id=variant.id.in.dosage_sp,
+                                    stringsAsFactors = FALSE)
     
     ## Reorder
     variant_order.dosage_sp <- match(results_dosage_sp$variant.id, variant.id.dosage_sp)
