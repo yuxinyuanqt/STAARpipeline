@@ -1,7 +1,7 @@
 Package: STAARpipeline
 Type: Package
 Title: STAARpipeline for Analyzing Whole-Genome/Whole-Exome Sequencing Data
-Version: 1.0.0
+Version: 0.9.9.1
 Date: 2026-09-21
 Author: Xihao Li [aut, cre], Zilin Li [aut, cre], Wenbo Wang [aut], Sheila M. Gaynor [aut], Han Chen [aut], Yuxin Yuan [aut]
 Maintainer: Xihao Li <xihaoli@unc.edu>, Zilin Li <lizl@nenu.edu.cn>, Wenbo Wang <wenbo@live.unc.edu>, Yuxin Yuan <yuxinyuan@nenu.edu.cn>
